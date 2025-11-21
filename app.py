@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-import json, re, os
+import json, re
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///properties.db'
@@ -8,26 +8,25 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-
 # ------------------------
 # Model
 # ------------------------
 class Property(db.Model):
     __tablename__ = 'properties'
     id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(255), nullable=False)
+    title = db.Column(db.String(255))
     description = db.Column(db.Text)
-    transaction_type = db.Column(db.String(50))
-    property_type = db.Column(db.String(50))
+    transaction_type = db.Column(db.String(64))
+    property_type = db.Column(db.String(64))
     price = db.Column(db.Float)
     area_size = db.Column(db.Float)
     bathrooms = db.Column(db.Integer)
     bedrooms = db.Column(db.Integer)
-    city = db.Column(db.String(100))
-    region = db.Column(db.String(100))
-    google_maps_link = db.Column(db.String(255))
-    main_image = db.Column(db.String(1024))
-    gallery_images = db.Column(db.Text)  # JSON array
+    city = db.Column(db.String(128))
+    google_maps_link = db.Column(db.String(1024))
+    region = db.Column(db.String(128))
+    main_image = db.Column(db.String(1024))        # store full URL
+    gallery_images = db.Column(db.Text)            # JSON list of URLs
     furnished = db.Column(db.Boolean)
     parking = db.Column(db.Boolean)
     elevator = db.Column(db.Boolean)
@@ -36,11 +35,11 @@ class Property(db.Model):
     balcony = db.Column(db.Boolean)
     storage_room = db.Column(db.Boolean)
     sea_view = db.Column(db.Boolean)
-    floor = db.Column(db.String(50))
-    year_built = db.Column(db.String(50))
-    renovated_year = db.Column(db.String(50))
-    created_at = db.Column(db.String(50))
-    status = db.Column(db.String(50))
+    floor = db.Column(db.String(64))
+    year_built = db.Column(db.String(64))
+    renovated_year = db.Column(db.String(64))
+    created_at = db.Column(db.String(64))
+    status = db.Column(db.String(64))
 
     def to_dict(self):
         return {
@@ -54,8 +53,8 @@ class Property(db.Model):
             "bathrooms": self.bathrooms,
             "bedrooms": self.bedrooms,
             "city": self.city,
-            "region": self.region,
             "google_maps_link": self.google_maps_link,
+            "region": self.region,
             "main_image": self.main_image,
             "gallery_images": json.loads(self.gallery_images) if self.gallery_images else [],
             "furnished": self.furnished,
@@ -73,201 +72,203 @@ class Property(db.Model):
             "status": self.status
         }
 
-
 with app.app_context():
     db.create_all()
-
 
 # ------------------------
 # Helpers
 # ------------------------
-def normalize_key(k: str) -> str:
-    """Lowercase, remove punctuation, replace spaces and dashes with underscores"""
-    k = k.strip().lower()
-    k = re.sub(r'[\-\s/]+', '_', k)
-    k = re.sub(r'[^a-z0-9_\u0370-\u03ff]', '', k)  # keep basic latin + greek block chars
-    return k
-
-
-def boolify(v):
+def parse_bool(v):
     if v is None:
         return None
     if isinstance(v, bool):
         return v
     s = str(v).strip().lower()
-    if s in ('1', 'true', 'yes', 'on', 'y', 'ναι', 'yes '):
+    if s in ('1','true','yes','on','y','ναι','yes '):
         return True
-    if s in ('0', 'false', 'no', 'off', 'n', 'όχι'):
+    if s in ('0','false','no','off','n','όχι'):
         return False
     return None
 
-
-def parse_number(v, cast=float, default=None):
+def parse_float(v):
     try:
-        if v is None or v == '':
-            return default
-        # remove commas, currency symbols
-        s = str(v).strip().replace(',', '').replace('€', '').replace('EUR', '')
-        return cast(s)
+        if v is None or str(v).strip() == "":
+            return None
+        s = str(v).strip().replace(',', '').replace('€','').replace('EUR','')
+        return float(s)
     except Exception:
-        return default
+        return None
 
+def parse_int(v):
+    try:
+        if v is None or str(v).strip() == "":
+            return None
+        s = str(v).strip().split('.')[0]
+        return int(s)
+    except Exception:
+        return None
 
-def parse_images_field(v):
+def parse_gallery_field(v):
     """
-    Accept many possible formats:
-    - list of URLs
-    - single URL string
-    - comma-separated filenames
-    - list of filenames
-    - strings of filenames separated by newline
-    We return a list of strings.
+    Accepts:
+      - an actual list (already parsed)
+      - comma-separated string of URLs
+      - string with URLs separated by commas/spaces/newlines
+    Returns list of strings (URLs / filenames)
     """
     if v is None:
         return []
     if isinstance(v, list):
-        return [str(x).strip() for x in v if x is not None and str(x).strip()]
+        return [str(x).strip() for x in v if str(x).strip()]
     s = str(v).strip()
-    if s == '':
+    if s == "":
         return []
-    # JSON list encoded as string?
+    # Try JSON parse (sometimes Forminator sends JSON array as string)
     try:
-        parsed = json.loads(s)
-        if isinstance(parsed, list):
-            return [str(x).strip() for x in parsed if x]
+        j = json.loads(s)
+        if isinstance(j, list):
+            return [str(x).strip() for x in j if str(x).strip()]
     except Exception:
         pass
-    # split by commas or newlines
     parts = re.split(r'[\r\n,]+', s)
     parts = [p.strip() for p in parts if p.strip()]
     return parts
 
-
-# Mapping of canonical fields to possible incoming keys
-FIELD_KEYS = {
-    "title": ["title", "title_field", "τίτλος", "όνομα"],
-    "description": ["description", "Περιγραφή", "description_field", "desc"],
-    "transaction_type": ["transaction_type", "transaction-type", "transaction type", "transaction", "Transaction Type",
-                         "Transaction"],
-    "property_type": ["property_type", "property-type", "property type", "Property Type"],
-    "price": ["price", "τιμή", "Τιμή Ευρώ", "price_eur"],
-    "area_size": ["area_size", "area size (sqm)", "area_size_(sqm)", "area", "Area Size (sqm)"],
-    "bathrooms": ["bathrooms", "Bathrooms"],
-    "bedrooms": ["bedrooms", "Bedrooms"],
-    "city": ["city", "location_city", "Location", "City"],
-    "region": ["region", "region_area", "Region / Area", "Region"],
-    "google_maps_link": ["google_maps_link", "google maps link", "Google Maps Link"],
-    "main_image": ["main_image", "main image", "Main Image (file upload)", "Main Image", "main-image"],
-    "gallery_images": ["gallery_images", "gallery images", "Gallery Images (multi-file upload)", "gallery-images"],
-    "furnished": ["furnished", "Furnished"],
-    "parking": ["parking", "Parking"],
-    "elevator": ["elevator", "Elevator"],
-    "pets_allowed": ["pets_allowed", "Pets Allowed"],
-    "air_conditioning": ["air_conditioning", "Air Conditioning"],
-    "balcony": ["balcony", "Balcony"],
-    "storage_room": ["storage_room", "Storage Room"],
-    "sea_view": ["sea_view", "Sea View"],
-    "floor": ["floor", "Floor"],
-    "year_built": ["year_built", "Year Built"],
-    "renovated_year": ["renovated_year", "Renovated Year (optional)"],
-    "created_at": ["created_at", "Date Submitted", "created"],
-    "status": ["status"]
+# Map the exact CSV column labels to canonical keys
+CSV_TO_KEY = {
+    "Title": "title",
+    "Περιγραφή": "description",
+    "Transaction Type": "transaction_type",
+    "Property Type": "property_type",
+    "Τιμή Ευρώ": "price",
+    "Area Size (sqm)": "area_size",
+    "Bathrooms": "bathrooms",
+    "Bedrooms": "bedrooms",
+    "Location - City": "city",
+    "Location - Google Maps Link": "google_maps_link",
+    "Location - Region / Area": "region",
+    "Photos / Media - Main Image (file upload)": "main_image",
+    "Photos / Media - Gallery Images (multi-file upload)": "gallery_images",
+    "Key Features - Furnished": "furnished",
+    "Key Features - Parking": "parking",
+    "Key Features - Elevator": "elevator",
+    "Key Features - Pets Allowed": "pets_allowed",
+    "Key Features - Air Conditioning": "air_conditioning",
+    "Key Features - Balcony": "balcony",
+    "Key Features - Storage Room": "storage_room",
+    "Key Features - Sea View": "sea_view",
+    "Extra Property Details - Floor": "floor",
+    "Extra Property Details - Year Built": "year_built",
+    "Extra Property Details - Renovated Year (optional)": "renovated_year",
+    "created_at": "created_at",
+    "status": "status",
+    "id": "incoming_id"
 }
 
-
-def find_value(data_normalized, keys):
-    for k in keys:
-        nk = normalize_key(k)
-        if nk in data_normalized:
-            return data_normalized[nk]
-        # also try raw key
-        if k in data_normalized:
-            return data_normalized[k]
-    return None
-
+def normalize_incoming(incoming):
+    """
+    Build a dict with canonical keys (CSV_TO_KEY values) from incoming payload.
+    Accepts JSON or form-encoded dicts.
+    """
+    result = {}
+    # incoming may have keys exactly as CSV header, or normalized keys. handle both
+    for raw_k, raw_v in incoming.items():
+        # try direct match
+        if raw_k in CSV_TO_KEY:
+            result[CSV_TO_KEY[raw_k]] = raw_v
+            continue
+        # try some normalized versions (strip spaces, case)
+        nk = raw_k.strip()
+        for header, target in CSV_TO_KEY.items():
+            if nk.lower() == header.lower():
+                result[target] = raw_v
+                break
+        else:
+            # fallback: simple normalized key (remove punctuation/space)
+            key_norm = re.sub(r'[\s\-_]+', ' ', raw_k).strip().lower()
+            for header, target in CSV_TO_KEY.items():
+                if key_norm == header.lower():
+                    result[target] = raw_v
+                    break
+            # otherwise ignore unknown fields (or you can store raw payload if needed)
+    return result
 
 # ------------------------
-# POST handler
+# POST handler: receive Forminator webhook
 # ------------------------
 @app.route('/api/property', methods=['POST'])
-def receive_property():
+def api_property_post():
     try:
-        # try parse JSON (silent so no exception on bad content-type)
+        # try JSON first, otherwise form data
         incoming = request.get_json(force=False, silent=True)
         if incoming is None:
-            # sometimes Forminator sends form-encoded; try request.form
+            # try form-encoded
             if request.form:
                 incoming = request.form.to_dict(flat=True)
             else:
                 incoming = {}
-        # normalize keys map: normalized_key -> value
-        data_normalized = {}
-        for k, v in incoming.items():
-            nk = normalize_key(k)
-            data_normalized[nk] = v
+        # If Forminator sends an array wrapper, handle it (some Forminator exports show an array)
+        if isinstance(incoming, list) and len(incoming) > 0 and isinstance(incoming[0], dict):
+            # take first object
+            incoming = incoming[0]
 
-        # debug log: print the incoming raw payload and normalized keys
-        print("=== Incoming raw payload ===")
-        print(incoming)
-        print("=== Normalized keys ===")
-        print(list(data_normalized.keys()))
-
-        # If empty test request from Forminator (no fields) -> return OK
+        # If empty test request, return OK
         if not incoming:
-            return jsonify({"status": "ok", "message": "Empty test request received"})
+            return jsonify({"status": "ok", "message": "Empty test request received"}), 200
 
-        # Build property fields using tolerant mapping
-        get = lambda canonical: find_value(data_normalized, FIELD_KEYS.get(canonical, []))
+        # normalize keys
+        normalized = normalize_incoming(incoming)
 
-        title = get("title") or get("title")
-        description = get("description") or ""
-        transaction_type = get("transaction_type") or ""
-        property_type = get("property_type") or ""
-        price = parse_number(get("price"), float, default=None)
-        area_size = parse_number(get("area_size"), float, default=None)
-        bathrooms = parse_number(get("bathrooms"), int, default=None)
-        bedrooms = parse_number(get("bedrooms"), int, default=None)
-        city = get("city") or ""
-        region = get("region") or ""
-        google_maps_link = get("google_maps_link") or ""
-        main_image_raw = get("main_image")
-        gallery_raw = get("gallery_images")
+        # parse fields
+        title = normalized.get("title") or "Untitled property"
+        description = normalized.get("description") or ""
+        transaction_type = normalized.get("transaction_type") or ""
+        property_type = normalized.get("property_type") or ""
+        price = parse_float(normalized.get("price"))
+        area_size = parse_float(normalized.get("area_size"))
+        bathrooms = parse_int(normalized.get("bathrooms"))
+        bedrooms = parse_int(normalized.get("bedrooms"))
+        city = normalized.get("city") or ""
+        google_maps_link = normalized.get("google_maps_link") or ""
+        region = normalized.get("region") or ""
 
-        main_image_list = parse_images_field(main_image_raw) if main_image_raw else []
-        main_image = main_image_list[0] if main_image_list else (str(main_image_raw).strip() if main_image_raw else "")
+        main_image_raw = normalized.get("main_image")
+        main_images = parse_gallery_field(main_image_raw)
+        main_image = main_images[0] if main_images else (str(main_image_raw).strip() if main_image_raw else "")
 
-        gallery_images = parse_images_field(gallery_raw) if gallery_raw else []
+        gallery_raw = normalized.get("gallery_images")
+        gallery_list = parse_gallery_field(gallery_raw)
 
-        furnished = boolify(get("furnished"))
-        parking = boolify(get("parking"))
-        elevator = boolify(get("elevator"))
-        pets_allowed = boolify(get("pets_allowed"))
-        air_conditioning = boolify(get("air_conditioning"))
-        balcony = boolify(get("balcony"))
-        storage_room = boolify(get("storage_room"))
-        sea_view = boolify(get("sea_view"))
+        furnished = parse_bool(normalized.get("furnished"))
+        parking = parse_bool(normalized.get("parking"))
+        elevator = parse_bool(normalized.get("elevator"))
+        pets_allowed = parse_bool(normalized.get("pets_allowed"))
+        air_conditioning = parse_bool(normalized.get("air_conditioning"))
+        balcony = parse_bool(normalized.get("balcony"))
+        storage_room = parse_bool(normalized.get("storage_room"))
+        sea_view = parse_bool(normalized.get("sea_view"))
 
-        floor = get("floor") or ""
-        year_built = get("year_built") or ""
-        renovated_year = get("renovated_year") or ""
-        created_at = get("created_at") or ""
-        status = get("status") or "available"
+        floor = normalized.get("floor") or ""
+        year_built = normalized.get("year_built") or ""
+        renovated_year = normalized.get("renovated_year") or ""
+        created_at = normalized.get("created_at") or ""
+        status = normalized.get("status") or "available"
 
         # create and save
         prop = Property(
-            title=str(title) if title else "Untitled property",
-            description=str(description),
-            transaction_type=str(transaction_type),
-            property_type=str(property_type),
+            title=title,
+            description=description,
+            transaction_type=transaction_type,
+            property_type=property_type,
             price=price,
             area_size=area_size,
             bathrooms=bathrooms,
             bedrooms=bedrooms,
-            city=str(city),
-            region=str(region),
-            google_maps_link=str(google_maps_link),
-            main_image=str(main_image),
-            gallery_images=json.dumps(gallery_images),
+            city=city,
+            google_maps_link=google_maps_link,
+            region=region,
+            main_image=main_image,
+            gallery_images=json.dumps(gallery_list),
             furnished=furnished,
             parking=parking,
             elevator=elevator,
@@ -276,36 +277,37 @@ def receive_property():
             balcony=balcony,
             storage_room=storage_room,
             sea_view=sea_view,
-            floor=str(floor),
-            year_built=str(year_built),
-            renovated_year=str(renovated_year),
-            created_at=str(created_at),
-            status=str(status)
+            floor=floor,
+            year_built=year_built,
+            renovated_year=renovated_year,
+            created_at=created_at,
+            status=status
         )
         db.session.add(prop)
         db.session.commit()
 
-        return jsonify({"status": "success", "property_id": prop.id})
+        # debug log
+        print("Saved property id:", prop.id)
+        print("Normalized payload:", normalized)
+
+        return jsonify({"status": "success", "property_id": prop.id}), 200
 
     except Exception as e:
-        print("Error in /api/property:", e)
+        print("Error in /api/property:", repr(e))
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
 # ------------------------
-# GET endpoints (unchanged)
+# GET endpoints
 # ------------------------
 @app.route('/api/properties', methods=['GET'])
-def get_properties():
+def api_get_properties():
     props = Property.query.order_by(Property.id.desc()).all()
     return jsonify([p.to_dict() for p in props])
 
-
 @app.route('/api/property/<int:prop_id>', methods=['GET'])
-def get_property(prop_id):
+def api_get_property(prop_id):
     prop = Property.query.get_or_404(prop_id)
     return jsonify(prop.to_dict())
-
 
 if __name__ == "__main__":
     app.run(debug=True)
