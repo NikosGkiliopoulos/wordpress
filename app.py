@@ -193,117 +193,115 @@ def normalize_incoming(incoming):
             # otherwise ignore unknown fields (or you can store raw payload if needed)
     return result
 
+FIELD_MAPPING = {
+    "text_1": "title",
+    "textarea_2": "description",
+    "radio_1": "property_type",
+    "radio_2": "transaction_type",
+    "currency_1": "price",
+    "number_1": "area_size",
+    "number_2": "bathrooms",
+    "number_3": "bedrooms",
+    "textarea_3": "region",
+    "url_1": "google_maps_link",
+    "text_2": "city",
+    "upload_1": "main_image",
+    "upload_2": "gallery_images",
+    "radio_3": "furnished",
+    "radio_4": "parking",
+    "radio_5": "elevator",
+    "radio_6": "pets_allowed",
+    "radio_7": "air_conditioning",
+    "radio_8": "balcony",
+    "radio_9": "storage_room",
+    "radio_10": "sea_view",
+    "number_4": "floor",
+    "number_5": "year_built",
+    "number_6": "renovated_year",
+    "hidden_2": "created_at",
+    "hidden_3": "status"
+}
+
+# Convert Forminator Yes/No (radio) to boolean
+YES_NO_MAP = {
+    "one": True,
+    "two": False
+}
+
 # ------------------------
 # POST handler: receive Forminator webhook
 # ------------------------
 @app.route('/api/property', methods=['POST'])
 def api_property_post():
+    data = request.get_json()
     print("RAW incoming data:", request.data)
-    try:
-        # try JSON first, otherwise form data
-        incoming = request.get_json(force=False, silent=True)
-        if incoming is None:
-            # try form-encoded
-            if request.form:
-                incoming = request.form.to_dict(flat=True)
+
+    normalized = {}
+
+    # Map fields
+    for form_key, model_key in FIELD_MAPPING.items():
+        if form_key in data:
+            value = data[form_key]
+            # Convert Yes/No radios to boolean
+            if model_key in ["furnished", "parking", "elevator", "pets_allowed", "air_conditioning", "balcony", "storage_room", "sea_view"]:
+                normalized[model_key] = YES_NO_MAP.get(value, None)
+            # Handle gallery_images as list
+            elif model_key == "gallery_images":
+                if "forminator_multifile_hidden" in data and f"upload_2" in data["forminator_multifile_hidden"]:
+                    files = data["forminator_multifile_hidden"]["upload_2"]
+                    normalized[model_key] = ",".join([f["file_name"] for f in files])
+                else:
+                    normalized[model_key] = value
             else:
-                incoming = {}
-        # If Forminator sends an array wrapper, handle it (some Forminator exports show an array)
-        if isinstance(incoming, list) and len(incoming) > 0 and isinstance(incoming[0], dict):
-            # take first object
-            incoming = incoming[0]
+                normalized[model_key] = value
 
-        # If empty test request, return OK
-        if not incoming:
-            return jsonify({"status": "ok", "message": "Empty test request received"}), 200
+    # Save to DB
+    prop = Property(**normalized)
+    db.session.add(prop)
+    db.session.commit()
 
-        # normalize keys
-        normalized = normalize_incoming(incoming)
+    print("Saved property id:", prop.id)
+    print("Normalized payload:", normalized)
 
-        # parse fields
-        title = normalized.get("title") or "Untitled property"
-        description = normalized.get("description") or ""
-        transaction_type = normalized.get("transaction_type") or ""
-        property_type = normalized.get("property_type") or ""
-        price = parse_float(normalized.get("price"))
-        area_size = parse_float(normalized.get("area_size"))
-        bathrooms = parse_int(normalized.get("bathrooms"))
-        bedrooms = parse_int(normalized.get("bedrooms"))
-        city = normalized.get("city") or ""
-        google_maps_link = normalized.get("google_maps_link") or ""
-        region = normalized.get("region") or ""
-
-        main_image_raw = normalized.get("main_image")
-        main_images = parse_gallery_field(main_image_raw)
-        main_image = main_images[0] if main_images else (str(main_image_raw).strip() if main_image_raw else "")
-
-        gallery_raw = normalized.get("gallery_images")
-        gallery_list = parse_gallery_field(gallery_raw)
-
-        furnished = parse_bool(normalized.get("furnished"))
-        parking = parse_bool(normalized.get("parking"))
-        elevator = parse_bool(normalized.get("elevator"))
-        pets_allowed = parse_bool(normalized.get("pets_allowed"))
-        air_conditioning = parse_bool(normalized.get("air_conditioning"))
-        balcony = parse_bool(normalized.get("balcony"))
-        storage_room = parse_bool(normalized.get("storage_room"))
-        sea_view = parse_bool(normalized.get("sea_view"))
-
-        floor = normalized.get("floor") or ""
-        year_built = normalized.get("year_built") or ""
-        renovated_year = normalized.get("renovated_year") or ""
-        created_at = normalized.get("created_at") or ""
-        status = normalized.get("status") or "available"
-
-        # create and save
-        prop = Property(
-            title=title,
-            description=description,
-            transaction_type=transaction_type,
-            property_type=property_type,
-            price=price,
-            area_size=area_size,
-            bathrooms=bathrooms,
-            bedrooms=bedrooms,
-            city=city,
-            google_maps_link=google_maps_link,
-            region=region,
-            main_image=main_image,
-            gallery_images=json.dumps(gallery_list),
-            furnished=furnished,
-            parking=parking,
-            elevator=elevator,
-            pets_allowed=pets_allowed,
-            air_conditioning=air_conditioning,
-            balcony=balcony,
-            storage_room=storage_room,
-            sea_view=sea_view,
-            floor=floor,
-            year_built=year_built,
-            renovated_year=renovated_year,
-            created_at=created_at,
-            status=status
-        )
-        db.session.add(prop)
-        db.session.commit()
-
-        # debug log
-        print("Saved property id:", prop.id)
-        print("Normalized payload:", normalized)
-
-        return jsonify({"status": "success", "property_id": prop.id}), 200
-
-    except Exception as e:
-        print("Error in /api/property:", repr(e))
-        return jsonify({"status": "error", "message": str(e)}), 500
-
+    return jsonify({"success": True, "id": prop.id})
 # ------------------------
 # GET endpoints
 # ------------------------
 @app.route('/api/properties', methods=['GET'])
-def api_get_properties():
-    props = Property.query.order_by(Property.id.desc()).all()
-    return jsonify([p.to_dict() for p in props])
+def get_properties():
+    props = Property.query.all()
+    result = []
+    for p in props:
+        result.append({
+            "id": p.id,
+            "title": p.title,
+            "description": p.description,
+            "property_type": p.property_type,
+            "transaction_type": p.transaction_type,
+            "price": p.price,
+            "area_size": p.area_size,
+            "bathrooms": p.bathrooms,
+            "bedrooms": p.bedrooms,
+            "city": p.city,
+            "region": p.region,
+            "google_maps_link": p.google_maps_link,
+            "main_image": p.main_image,
+            "gallery_images": p.gallery_images.split(",") if p.gallery_images else [],
+            "furnished": p.furnished,
+            "parking": p.parking,
+            "elevator": p.elevator,
+            "pets_allowed": p.pets_allowed,
+            "air_conditioning": p.air_conditioning,
+            "balcony": p.balcony,
+            "storage_room": p.storage_room,
+            "sea_view": p.sea_view,
+            "floor": p.floor,
+            "year_built": p.year_built,
+            "renovated_year": p.renovated_year,
+            "created_at": p.created_at,
+            "status": p.status
+        })
+    return jsonify(result)
 
 @app.route('/api/property/<int:prop_id>', methods=['GET'])
 def api_get_property(prop_id):
