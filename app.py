@@ -198,6 +198,7 @@ def normalize_incoming(incoming):
 # ------------------------
 @app.route('/api/property', methods=['POST'])
 def api_property_post():
+    print("RAW incoming data:", request.data)
     try:
         # try JSON first, otherwise form data
         incoming = request.get_json(force=False, silent=True)
