@@ -24,38 +24,25 @@ with app.app_context():
     db.create_all()
 
 @app.route('/api/property', methods=['POST'])
-def add_property():
-    # Accept JSON, Form Data, or Multipart
-    if request.is_json:
-        data = request.get_json()
-    else:
-        data = request.form.to_dict()
-
-    if not data:
-        return jsonify({"status": "error", "message": "No data received"}), 400
-
-    title = data.get("title")
-    gallery_images = data.get("gallery_images", "[]")
-
-    # If gallery_images is a string from Forminator, convert it to a list
+def receive_property():
     try:
-        if isinstance(gallery_images, str):
-            gallery_images = json.loads(gallery_images)
-    except:
-        gallery_images = [gallery_images]
+        data = request.get_json(force=True, silent=True)
 
-    prop = Property(
-        title=title,
-        gallery_images=json.dumps(gallery_images)
-    )
+        if not data:
+            # Forminator sends an empty test request first
+            return jsonify({
+                "status": "ok",
+                "message": "Empty test request received"
+            })
 
-    db.session.add(prop)
-    db.session.commit()
+        print("Incoming data:", data)
 
-    return jsonify({
-        "status": "success",
-        "property_id": prop.id
-    })
+        # TODO: Save to database later
+        return jsonify({"status": "success", "received": data})
+
+    except Exception as e:
+        print("Error:", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/properties', methods=['GET'])
 def get_properties():
