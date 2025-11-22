@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 import os, json, re
+from collections import OrderedDict
 
 app = Flask(__name__)
 
@@ -53,35 +54,35 @@ class Property(db.Model):
     status = db.Column(db.String(64))
 
     def to_json(self):
-        return {
-            "id": self.id,
-            "title": self.title,
-            "description": self.description,
-            "transaction_type": self.transaction_type,
-            "property_type": self.property_type,
-            "price": self.price,
-            "area_size": self.area_size,
-            "bathrooms": self.bathrooms,
-            "bedrooms": self.bedrooms,
-            "city": self.city,
-            "google_maps_link": self.google_maps_link,
-            "region": self.region,
-            "main_image": self.main_image,
-            "gallery_images": json.loads(self.gallery_images) if self.gallery_images else [],
-            "furnished": self.furnished,
-            "parking": self.parking,
-            "elevator": self.elevator,
-            "pets_allowed": self.pets_allowed,
-            "air_conditioning": self.air_conditioning,
-            "balcony": self.balcony,
-            "storage_room": self.storage_room,
-            "sea_view": self.sea_view,
-            "floor": self.floor,
-            "year_built": self.year_built,
-            "renovated_year": self.renovated_year,
-            "created_at": self.created_at,
-            "status": self.status
-        }
+        return OrderedDict([
+            ("id", self.id),
+            ("title", self.title),
+            ("description", self.description),
+            ("transaction_type", self.transaction_type),
+            ("property_type", self.property_type),
+            ("price", self.price),
+            ("area_size", self.area_size),
+            ("bedrooms", self.bedrooms),
+            ("bathrooms", self.bathrooms),
+            ("region", self.region),
+            ("city", self.city),
+            ("google_maps_link", self.google_maps_link),
+            ("main_image", self.main_image),
+            ("gallery_images", json.loads(self.gallery_images) if self.gallery_images else []),
+            ("floor", self.floor),
+            ("furnished", self.furnished),
+            ("parking", self.parking),
+            ("elevator", self.elevator),
+            ("pets_allowed", self.pets_allowed),
+            ("air_conditioning", self.air_conditioning),
+            ("balcony", self.balcony),
+            ("storage_room", self.storage_room),
+            ("sea_view", self.sea_view),
+            ("year_built", self.year_built),
+            ("renovated_year", self.renovated_year),
+            ("created_at", self.created_at),
+            ("status", self.status),
+        ])
 
 # Create table if not exists
 with app.app_context():
